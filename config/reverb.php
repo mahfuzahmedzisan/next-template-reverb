@@ -77,18 +77,18 @@ return [
                 'secret' => env('REVERB_APP_SECRET'),
                 'app_id' => env('REVERB_APP_ID'),
                 'options' => [
-                    'host' => env('REVERB_HOST', 'ws.reverb.maktechlaravel.cloud'),
-                    'port' => env('REVERB_PORT', 443),
-                    'scheme' => env('REVERB_SCHEME', 'https'),
-                    'useTLS' => env('REVERB_SCHEME', 'https') === 'https',
+                    'host' => env('REVERB_HOST', 'localhost'),
+                    'port' => env('REVERB_PORT', 8080),
+                    'scheme' => env('REVERB_SCHEME', 'http'),
+                    'useTLS' => env('REVERB_SCHEME', 'http') === 'https',
                 ],
                 // NOTE: Reverb matches these against the HOST of the browser's
                 // Origin header (parse_url(..., PHP_URL_HOST)) using Str::is().
                 // Values MUST be bare hostnames — no scheme, no port. Wildcards
-                // are allowed, e.g. "*.maktechlaravel.cloud". Use "*" to allow all.
+                // are allowed, e.g. "*.example.com". Use "*" to allow all.
                 'allowed_origins' => array_values(array_filter(array_map(
                     'trim',
-                    explode(',', (string) env('REVERB_ALLOWED_ORIGINS', 'localhost,127.0.0.1,reverb.maktechlaravel.cloud,*.maktechlaravel.cloud'))
+                    explode(',', (string) env('REVERB_ALLOWED_ORIGINS', 'localhost,127.0.0.1'))
                 ))),
                 'ping_interval' => env('REVERB_APP_PING_INTERVAL', 60),
                 'activity_timeout' => env('REVERB_APP_ACTIVITY_TIMEOUT', 30),

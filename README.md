@@ -1,41 +1,34 @@
-# ZBC News Reverb Server
+# next-template Reverb
 
-Dedicated [Laravel Reverb](https://laravel.com/docs/13.x/reverb) WebSocket service for the ZBC News platform. This repository runs only the Reverb process; the main ZBC News Laravel application (separate repo) dispatches broadcast events, runs queue workers, authorizes private channels, and hosts the Laravel Echo client.
+Dedicated [Laravel Reverb](https://laravel.com/docs/13.x/reverb) WebSocket process for the next-template stack. This repository only runs `php artisan reverb:start`. It does not publish events or authorize channels.
 
-## Architecture
+| Repo | Role |
+|------|------|
+| **next-template-reverb** (this repo) | WebSocket server. Source of truth for `REVERB_APP_*`. |
+| **next-template-api** | Publisher (`BROADCAST_CONNECTION=reverb` + `pusher/pusher-php-server`). Passport channel auth at `POST /api/v1/broadcasting/auth`. Do **not** install `laravel/reverb` there. |
+| **next-template** (Next.js) | Laravel Echo in the browser. Private channels authenticate through the BFF (`POST /api/broadcasting/auth`), which attaches the Passport bearer token. |
 
 ```mermaid
 flowchart LR
-    subgraph mainApp [ZBC_News_Laravel_App]
-        API[HTTP_API]
-        Queue[Queue_Worker]
-        Auth["/broadcasting/auth"]
-        Events[ShouldBroadcast_Events]
-    end
+  subgraph nextApp [next-template]
+    Echo[Laravel_Echo]
+    BffAuth["/api/broadcasting/auth"]
+  end
 
-    subgraph reverbSvc [reverb_server]
-        Reverb[Reverb_WebSocket_8080]
-    end
+  subgraph apiApp [next-template-api]
+    Events[ShouldBroadcast_Events]
+    ChanAuth["POST /api/v1/broadcasting/auth"]
+  end
 
-    subgraph clients [Browser_Clients]
-        Echo[Laravel_Echo]
-    end
+  subgraph reverbSvc [next-template-reverb]
+    Reverb[Reverb_8080]
+  end
 
-    Events --> Queue
-    Queue -->|"HTTP publish"| Reverb
-    Echo -->|"wss subscribe"| Reverb
-    Echo -->|"private channel auth"| Auth
+  Events -->|"HTTP publish"| Reverb
+  Echo -->|"ws / wss"| Reverb
+  Echo --> BffAuth
+  BffAuth -->|"X-BFF-Secret + Bearer"| ChanAuth
 ```
-
-| Responsibility | This repo | Main ZBC News app |
-|----------------|-----------|-------------------|
-| WebSocket server | Yes | No |
-| `REVERB_APP_*` credentials | Source of truth | Must match exactly |
-| `BROADCAST_CONNECTION=reverb` | Optional | Required |
-| Queue worker | No | Required |
-| `routes/channels.php` | Stub only | Required |
-| Broadcast events | No | Yes |
-| Laravel Echo | No | Yes |
 
 ## Local development
 
@@ -44,143 +37,52 @@ cp .env.example .env
 php artisan key:generate
 
 # Set REVERB_APP_ID, REVERB_APP_KEY, REVERB_APP_SECRET
-# Share the same values with the main ZBC News app
+# Copy the same values to next-template-api.
+# Copy the public key/host/port/scheme to Next as NEXT_PUBLIC_REVERB_*.
 
 php artisan reverb:start --debug
 ```
 
-Or run Reverb with the dev helper:
-
-```bash
-composer run dev
-```
-
-Reverb listens on `ws://localhost:8080` by default.
+Reverb listens on `ws://localhost:8080`. `REVERB_ALLOWED_ORIGINS` must list the Next.js hostname (`localhost`), not this WebSocket host.
 
 ## Docker
 
 ```bash
 cp .env.example .env
-# populate REVERB_APP_* and other variables
-
 docker compose up --build
 ```
 
-Or build and run manually:
+Or:
 
 ```bash
-docker build -t zbc-reverb .
-docker run -p 8080:8080 --env-file .env zbc-reverb
+docker build -t next-template-reverb .
+docker run -p 8080:8080 --env-file .env next-template-reverb
 ```
 
-Inject environment variables at runtime; do not bake secrets into the image.
+Inject secrets at runtime. Do not bake them into the image.
 
 ## Environment variables
 
 | Variable | Purpose |
 |----------|---------|
-| `REVERB_APP_ID` | Application ID (shared with main app) |
-| `REVERB_APP_KEY` | Public key for WebSocket clients |
-| `REVERB_APP_SECRET` | Secret for signing broadcast API requests |
-| `REVERB_SERVER_HOST` | Bind address for `reverb:start` (use `0.0.0.0` in Docker) |
-| `REVERB_SERVER_PORT` | Bind port for `reverb:start` (default `8080`) |
-| `REVERB_HOST` | Public hostname clients and main app use |
-| `REVERB_PORT` | Public port (e.g. `443` behind reverse proxy) |
+| `REVERB_APP_ID` | Application ID (shared with the API) |
+| `REVERB_APP_KEY` | Public key (`NEXT_PUBLIC_REVERB_APP_KEY` on Next) |
+| `REVERB_APP_SECRET` | Signs API publish requests. Never expose to the browser. |
+| `REVERB_SERVER_HOST` | Bind address (`0.0.0.0` in Docker) |
+| `REVERB_SERVER_PORT` | Bind port (`8080`) |
+| `REVERB_HOST` | Public hostname the API and Echo use |
+| `REVERB_PORT` | Public port (`8080` local, `443` behind TLS) |
 | `REVERB_SCHEME` | `http` locally, `https` in production |
-| `REVERB_ALLOWED_ORIGINS` | Comma-separated frontend origins allowed to connect |
+| `REVERB_ALLOWED_ORIGINS` | Bare hostnames of the Next.js app |
 
-Generate credentials once and store them in your secrets manager. The main app must use identical `REVERB_APP_*` values.
+## Production (Coolify)
 
-## Main ZBC News app integration
-
-### Server-side
-
-In the main Laravel application:
-
-```bash
-composer require laravel/reverb
-php artisan install:broadcasting --reverb --no-interaction
-```
-
-Mirror credentials and public Reverb endpoint:
-
-```dotenv
-BROADCAST_CONNECTION=reverb
-REVERB_APP_ID=<same as reverb_server>
-REVERB_APP_KEY=<same>
-REVERB_APP_SECRET=<same>
-REVERB_HOST=<public reverb hostname>
-REVERB_PORT=443
-REVERB_SCHEME=https
-```
-
-Ensure a queue worker is always running:
-
-```bash
-php artisan queue:work
-```
-
-Register broadcast channels in `bootstrap/app.php`:
-
-```php
-->withRouting(
-    web: __DIR__.'/../routes/web.php',
-    channels: __DIR__.'/../routes/channels.php',
-    health: '/up',
-)
-```
-
-Define authorization in `routes/channels.php`:
-
-```php
-Broadcast::channel('article.{articleId}', function (User $user, int $articleId) {
-    // return true/false or user data for presence channels
-});
-```
-
-Create events implementing `ShouldBroadcast` (e.g. `ArticlePublished`, `BreakingNewsAlert`).
-
-### Client-side (main app only)
-
-```bash
-npm install --save-dev laravel-echo pusher-js
-```
-
-Configure Echo in `resources/js/bootstrap.js`:
-
-```js
-import Echo from 'laravel-echo';
-import Pusher from 'pusher-js';
-
-window.Pusher = Pusher;
-
-window.Echo = new Echo({
-    broadcaster: 'reverb',
-    key: import.meta.env.VITE_REVERB_APP_KEY,
-    wsHost: import.meta.env.VITE_REVERB_HOST,
-    wsPort: import.meta.env.VITE_REVERB_PORT ?? 80,
-    wssPort: import.meta.env.VITE_REVERB_PORT ?? 443,
-    forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'https') === 'https',
-    enabledTransports: ['ws', 'wss'],
-});
-```
-
-Add to the main app `.env`:
-
-```dotenv
-VITE_REVERB_APP_KEY="${REVERB_APP_KEY}"
-VITE_REVERB_HOST="${REVERB_HOST}"
-VITE_REVERB_PORT="${REVERB_PORT}"
-VITE_REVERB_SCHEME="${REVERB_SCHEME}"
-```
-
-## Production notes
-
-- Terminate TLS at Nginx/Forge and proxy WebSocket traffic to Reverb on port `8080`.
-- Set `REVERB_ALLOWED_ORIGINS` to your real frontend domains (not `*`).
-- Run Reverb under Supervisor/systemd with auto-restart.
-- After deploys: `php artisan reverb:restart`.
-- For horizontal scaling: `REVERB_SCALING_ENABLED=true` plus shared Redis.
+- Terminate TLS at the proxy and forward WebSocket traffic to container port `8080`.
+- Healthcheck the Reverb HTTP port (the process is Reverb, not `artisan serve`).
+- Set `REVERB_HOST` to the public WSS hostname, `REVERB_PORT=443`, `REVERB_SCHEME=https`.
+- Set `REVERB_ALLOWED_ORIGINS` to the production Next.js hostname.
+- Mirror `REVERB_APP_*`, `REVERB_HOST`, `REVERB_PORT`, and `REVERB_SCHEME` on the API. Do not run `reverb:start` in the API image.
+- Optional later: `REVERB_SCALING_ENABLED=true` plus a shared Redis when running more than one replica.
 
 ## Documentation
 
