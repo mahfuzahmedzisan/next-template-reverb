@@ -3,24 +3,43 @@ set -e
 
 cd /var/www
 
-echo "[entrypoint] Starting reverb_server container..."
+echo "[entrypoint] Starting next-template-reverb container..."
 
 # ─── Merge runtime env vars into .env ─────────────────────────────────────────
-# Coolify injects configuration as container environment variables. Laravel reads
-# .env, so we project the relevant variables into .env on boot. Only non-empty
-# values are written; existing keys are updated in place, new keys are appended.
+# Coolify injects configuration as container environment variables. Laravel
+# reads .env, so we project the relevant variables on boot.
+#
+# Values MUST be double-quoted. Unquoted values with spaces (e.g. APP_NAME)
+# make Dotenv throw "unexpected whitespace" and Reverb crash-loops before
+# the healthcheck can pass.
 if [ -f .env ]; then
     cp .env .env.backup
 fi
 
-printenv | grep -E "^(APP_|DB_|REVERB_|LOG_|CACHE_|SESSION_|QUEUE_|REDIS_|FRONTEND_)" | while IFS='=' read -r key value; do
-    if [ -n "$value" ]; then
-        # '|' is a safe delimiter: base64 keys, domains and URLs never contain it
-        if grep -q "^${key}=" .env 2>/dev/null; then
-            sed -i "s|^${key}=.*|${key}=${value}|" .env
-        else
-            echo "${key}=${value}" >> .env
-        fi
+dotenv_escape() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+write_env() {
+    local key="$1"
+    local value="$2"
+    local escaped
+    escaped="$(dotenv_escape "$value")"
+
+    if grep -q "^${key}=" .env 2>/dev/null; then
+        # Use '|' delimiter; keys/values should not contain it.
+        sed -i "s|^${key}=.*|${key}=\"${escaped}\"|" .env
+    else
+        printf '%s="%s"\n' "$key" "$escaped" >> .env
+    fi
+}
+
+# Prefer key=value split that keeps everything after the first '=' (APP_KEY).
+printenv | grep -E "^(APP_|DB_|REVERB_|LOG_|CACHE_|SESSION_|QUEUE_|REDIS_|FRONTEND_)" | while IFS= read -r line; do
+    key="${line%%=*}"
+    value="${line#*=}"
+    if [ -n "$key" ] && [ -n "$value" ]; then
+        write_env "$key" "$value"
     fi
 done
 
@@ -29,16 +48,17 @@ echo "[entrypoint] Environment written to .env"
 # ─── Ensure an APP_KEY exists (Reverb boots Laravel, which expects one) ────────
 php artisan config:clear 2>/dev/null || true
 
-APP_KEY_VAL=$(grep "^APP_KEY=" .env 2>/dev/null | cut -d'=' -f2-)
-if [ -z "$APP_KEY_VAL" ] || [ "$APP_KEY_VAL" = '""' ]; then
+APP_KEY_VAL=$(grep "^APP_KEY=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"')
+if [ -z "$APP_KEY_VAL" ] || [ "$APP_KEY_VAL" = "" ]; then
     echo "[entrypoint] APP_KEY missing — generating one"
     php artisan key:generate --force --no-interaction || true
 fi
 
 # ─── SQLite file so the framework can boot (Reverb needs no real DB) ───────────
-if grep -q "DB_CONNECTION=sqlite" .env 2>/dev/null; then
+if grep -qE '^DB_CONNECTION=["'\'']?sqlite' .env 2>/dev/null; then
     mkdir -p database
     touch database/database.sqlite
+    chown www-data:www-data database/database.sqlite 2>/dev/null || true
     echo "[entrypoint] SQLite database file ensured"
 fi
 

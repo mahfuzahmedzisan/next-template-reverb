@@ -78,10 +78,12 @@ Inject secrets at runtime. Do not bake them into the image.
 ## Production (Coolify)
 
 - Terminate TLS at the proxy and forward WebSocket traffic to container port `8080`.
-- Healthcheck the Reverb HTTP port (the process is Reverb, not `artisan serve`).
+- Dockerfile `HEALTHCHECK` uses `curl` against `127.0.0.1:8080` (curl is installed in the image).
+- Set `APP_NAME=next-template-reverb` (**no spaces** — Coolify writes env unquoted).
 - Set `REVERB_HOST` to the public WSS hostname, `REVERB_PORT=443`, `REVERB_SCHEME=https`.
-- Set `REVERB_ALLOWED_ORIGINS` to the production Next.js hostname.
+- Set `REVERB_ALLOWED_ORIGINS` to the production Next.js hostname (bare host, e.g. `next-template-eta.vercel.app`).
 - Mirror `REVERB_APP_*`, `REVERB_HOST`, `REVERB_PORT`, and `REVERB_SCHEME` on the API. Do not run `reverb:start` in the API image.
+- Full production env templates: see `docs/reverb.md` in the Next.js repo.
 - Optional later: `REVERB_SCALING_ENABLED=true` plus a shared Redis when running more than one replica.
 
 ## Documentation
